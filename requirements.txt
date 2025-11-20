@@ -1,0 +1,37 @@
+# Core ML frameworks
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# 3D processing libraries
+pytorch3d
+trimesh>=3.21.0
+open3d>=0.17.0
+pyntcloud>=0.3.0
+
+# Point cloud processing
+plyfile>=0.9.0
+pymeshlab>=2022.2
+
+# Diffusion and generative models
+diffusers>=0.21.0
+transformers>=4.30.0
+accelerate>=0.20.0
+
+# Training utilities
+tensorboard>=2.13.0
+wandb>=0.15.0
+tqdm>=4.65.0
+einops>=0.6.1
+
+# Data handling
+h5py>=3.8.0
+pillow>=9.5.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Utilities
+pyyaml>=6.0
+omegaconf>=2.3.0
+scikit-learn>=1.2.0
