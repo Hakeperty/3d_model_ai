@@ -25,12 +25,14 @@ def setup_ddp(rank: int, world_size: int):
     import os
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
+    os.environ['USE_LIBUV'] = '0'  # Disable libuv on Windows
     
-    # Initialize process group
+    # Initialize process group (use gloo for Windows)
     dist.init_process_group(
         backend=Config.DISTRIBUTED_BACKEND,
         rank=rank,
-        world_size=world_size
+        world_size=world_size,
+        init_method='env://'
     )
 
 

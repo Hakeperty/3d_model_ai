@@ -36,7 +36,7 @@ class Config:
     
     # Multi-GPU settings
     NUM_GPUS = 2
-    DISTRIBUTED_BACKEND = "nccl"  # nccl for NVIDIA GPUs
+    DISTRIBUTED_BACKEND = "gloo"  # gloo for Windows, nccl for Linux
     FIND_UNUSED_PARAMETERS = False
     
     # Data

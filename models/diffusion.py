@@ -95,8 +95,10 @@ class DiffusionModel(nn.Module):
         if noise is None:
             noise = torch.randn_like(x0)
         
-        sqrt_alpha = self.schedule.sqrt_alphas_cumprod[t]
-        sqrt_one_minus_alpha = self.schedule.sqrt_one_minus_alphas_cumprod[t]
+        # Ensure tensors are on the same device as x0
+        device = x0.device
+        sqrt_alpha = self.schedule.sqrt_alphas_cumprod.to(device)[t]
+        sqrt_one_minus_alpha = self.schedule.sqrt_one_minus_alphas_cumprod.to(device)[t]
         
         # Reshape for broadcasting [B, 1, 1]
         sqrt_alpha = sqrt_alpha.view(-1, 1, 1)
@@ -161,13 +163,13 @@ class DiffusionModel(nn.Module):
             # Predict noise
             predicted_noise = self.predict_noise(x, t_batch, condition)
             
-            # Get schedule parameters
-            alpha = self.schedule.alphas[t]
-            alpha_cumprod = self.schedule.alphas_cumprod[t]
-            beta = self.schedule.betas[t]
+            # Get schedule parameters (ensure on correct device)
+            alpha = self.schedule.alphas.to(device)[t]
+            alpha_cumprod = self.schedule.alphas_cumprod.to(device)[t]
+            beta = self.schedule.betas.to(device)[t]
             
             # Compute previous sample mean
-            alpha_cumprod_prev = self.schedule.alphas_cumprod_prev[t]
+            alpha_cumprod_prev = self.schedule.alphas_cumprod_prev.to(device)[t]
             
             # Predict x0
             pred_x0 = (x - torch.sqrt(1 - alpha_cumprod) * predicted_noise) / torch.sqrt(alpha_cumprod)
@@ -181,7 +183,7 @@ class DiffusionModel(nn.Module):
             # Add noise (except for final step)
             if t > 0:
                 noise = torch.randn_like(x)
-                variance = self.schedule.posterior_variance[t]
+                variance = self.schedule.posterior_variance.to(device)[t]
                 x = x + torch.sqrt(variance) * noise
         
         return x
