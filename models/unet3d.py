@@ -75,7 +75,7 @@ class PointNetFeaturePropagation(nn.Module):
 
 class UNet3D(nn.Module):
     """
-    3D U-Net for point cloud denoising in diffusion models
+    Simplified 3D U-Net for point cloud denoising in diffusion models
     """
     
     def __init__(
@@ -96,9 +96,8 @@ class UNet3D(nn.Module):
         # Time embedding
         self.time_mlp = nn.Sequential(
             TimeEmbedding(time_dim),
-            nn.Linear(time_dim, time_dim * 2),
-            nn.ReLU(),
-            nn.Linear(time_dim * 2, time_dim)
+            nn.Linear(time_dim, time_dim),
+            nn.ReLU()
         )
         
         # Condition embedding (if provided)
@@ -106,38 +105,57 @@ class UNet3D(nn.Module):
         if self.use_condition:
             self.condition_mlp = nn.Sequential(
                 nn.Linear(condition_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, hidden_dim)
+                nn.ReLU()
             )
         
-        # Initial projection
-        self.input_proj = nn.Conv1d(input_dim, hidden_dim, 1)
+        # Initial projection: input + time
+        self.input_proj = nn.Sequential(
+            nn.Conv1d(input_dim + time_dim, hidden_dim, 1),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU()
+        )
         
-        # Encoder (downsampling)
-        self.encoders = nn.ModuleList()
-        in_ch = hidden_dim
-        for i in range(num_layers):
-            out_ch = hidden_dim * (2 ** i)
-            self.encoders.append(PointNetSetAbstraction(in_ch + time_dim, out_ch))
-            in_ch = out_ch
+        # Encoder layers
+        self.encoder1 = nn.Sequential(
+            nn.Conv1d(hidden_dim, hidden_dim, 1),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
+            nn.Conv1d(hidden_dim, hidden_dim * 2, 1),
+            nn.BatchNorm1d(hidden_dim * 2),
+            nn.ReLU()
+        )
+        
+        self.encoder2 = nn.Sequential(
+            nn.Conv1d(hidden_dim * 2, hidden_dim * 2, 1),
+            nn.BatchNorm1d(hidden_dim * 2),
+            nn.ReLU(),
+            nn.Conv1d(hidden_dim * 2, hidden_dim * 4, 1),
+            nn.BatchNorm1d(hidden_dim * 4),
+            nn.ReLU()
+        )
         
         # Bottleneck
-        self.bottleneck = PointNetSetAbstraction(in_ch + time_dim, in_ch)
+        self.bottleneck = nn.Sequential(
+            nn.Conv1d(hidden_dim * 4, hidden_dim * 4, 1),
+            nn.BatchNorm1d(hidden_dim * 4),
+            nn.ReLU()
+        )
         
-        # Decoder (upsampling)
-        self.decoders = nn.ModuleList()
-        for i in range(num_layers - 1, -1, -1):
-            out_ch = hidden_dim * (2 ** i) if i > 0 else hidden_dim
-            # Skip connection doubles the input channels
-            self.decoders.append(PointNetFeaturePropagation(in_ch * 2 + time_dim, out_ch))
-            in_ch = out_ch
+        # Decoder layers
+        self.decoder2 = nn.Sequential(
+            nn.Conv1d(hidden_dim * 4 + hidden_dim * 2, hidden_dim * 2, 1),  # 4x + skip(2x)
+            nn.BatchNorm1d(hidden_dim * 2),
+            nn.ReLU()
+        )
+        
+        self.decoder1 = nn.Sequential(
+            nn.Conv1d(hidden_dim * 2 + hidden_dim, hidden_dim, 1),  # 2x + skip(1x)
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU()
+        )
         
         # Output projection
-        self.output_proj = nn.Sequential(
-            nn.Conv1d(hidden_dim, hidden_dim // 2, 1),
-            nn.ReLU(),
-            nn.Conv1d(hidden_dim // 2, input_dim, 1)
-        )
+        self.output_proj = nn.Conv1d(hidden_dim, input_dim, 1)
     
     def forward(
         self,
@@ -160,37 +178,43 @@ class UNet3D(nn.Module):
         t_emb = self.time_mlp(t)  # [B, time_dim]
         t_emb = t_emb[:, :, None].expand(-1, -1, num_points)  # [B, time_dim, N]
         
-        # Condition embedding (if provided)
+        # Transpose for conv1d: [B, N, 3] -> [B, 3, N]
+        x = x.transpose(1, 2)  # [B, 3, N]
+        
+        # Concatenate input with time
+        x = torch.cat([x, t_emb], dim=1)  # [B, 3+time_dim, N]
+        
+        # Initial projection
+        x = self.input_proj(x)  # [B, hidden_dim, N]
+        
+        # Add condition if provided
         if self.use_condition and condition is not None:
             cond_emb = self.condition_mlp(condition)  # [B, hidden_dim]
             cond_emb = cond_emb[:, :, None].expand(-1, -1, num_points)  # [B, hidden_dim, N]
-        
-        # Initial projection [B, N, 3] -> [B, 3, N] -> [B, hidden_dim, N]
-        x = x.transpose(1, 2)  # [B, 3, N]
-        x = self.input_proj(x)  # [B, hidden_dim, N]
-        
-        # Add condition to initial features
-        if self.use_condition and condition is not None:
             x = x + cond_emb
         
         # Encoder with skip connections
-        skip_connections = []
-        for encoder in self.encoders:
-            skip_connections.append(x)
-            x = torch.cat([x, t_emb], dim=1)  # Concatenate time embedding
-            x = encoder(x)
+        skip1 = x
+        x = self.encoder1(x)  # [B, hidden_dim*2, N]
+        
+        skip2 = x
+        x = self.encoder2(x)  # [B, hidden_dim*4, N]
         
         # Bottleneck
-        x = torch.cat([x, t_emb], dim=1)
-        x = self.bottleneck(x)
+        x = self.bottleneck(x)  # [B, hidden_dim*4, N]
         
         # Decoder with skip connections
-        for decoder, skip in zip(self.decoders, reversed(skip_connections)):
-            x = torch.cat([x, skip, t_emb], dim=1)  # Skip connection + time
-            x = decoder(x)
+        x = torch.cat([x, skip2], dim=1)  # Concatenate skip connection
+        x = self.decoder2(x)  # [B, hidden_dim*2, N]
+        
+        x = torch.cat([x, skip1], dim=1)  # Concatenate skip connection
+        x = self.decoder1(x)  # [B, hidden_dim, N]
         
         # Output projection
         x = self.output_proj(x)  # [B, 3, N]
-        x = x.transpose(1, 2)  # [B, N, 3]
+        
+        # Transpose back: [B, 3, N] -> [B, N, 3]
+        x = x.transpose(1, 2)
         
         return x
+
